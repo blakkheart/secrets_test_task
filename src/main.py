@@ -132,14 +132,14 @@ async def get_secret(code_phrase: ReadCodePhrase, secret_key: str) -> str:
     )
 
 
-@app.get('/', response_class=HTMLResponse)
+@app.get('/', response_class=HTMLResponse, include_in_schema=False)
 async def main_page(request: Request):
     return templates.TemplateResponse(
         request=request, name='index.html'
     )
 
 
-@app.get('/get_a_secret', response_class=HTMLResponse)
+@app.get('/get_a_secret', response_class=HTMLResponse, include_in_schema=False)
 async def get_a_secret_page(request: Request):
     return templates.TemplateResponse(
         request=request, name='get_a_secret.html'
