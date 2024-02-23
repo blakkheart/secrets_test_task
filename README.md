@@ -74,14 +74,14 @@ Cервер запустится по адресу **localhost:8000** и вы с
  - **localhost:8000/generate**   —   POST запрос c параметрами:
 	 ```json
 	 {
-	 "code_phrase: "string",
+	 "code_phrase": "string",
 	 "secret": "string"
 	 }
 	 ```
   - **localhost:8000/generate/{secret_key}**   —   POST запрос c параметрами:
 	  ```json
 	  {
-	 "code_phrase: "string"
+	 "code_phrase": "string"
 	 }
 	  ```
   - **localhost:8000** - демо проекта.
