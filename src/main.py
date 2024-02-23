@@ -1,27 +1,34 @@
 from datetime import datetime, timedelta
-import secrets
-import string
 import os
 import hashlib
-import pytz
+import secrets
+import string
+from typing import Annotated, Optional
+
+
 from contextlib import asynccontextmanager
-from dotenv import load_dotenv
 from cryptography.fernet import Fernet
-from typing import Annotated, List, Optional
-from fastapi import FastAPI, HTTPException, status
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException, status, Request
+from fastapi.responses import HTMLResponse
+from fastapi.templating import Jinja2Templates
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
+import pytz
 
 
 load_dotenv()
 
-MONGO_URL = 'mongodb://127.0.0.1:27017'
+MONGO_URL = os.getenv('MONGO_URL', 'mongodb://127.0.0.1:27017')
 client = AsyncIOMotorClient(MONGO_URL)
-db = client['mydatebase']
-collection = db['items']
-# db.items.create_index({"created_at": 1}, {expireAfterSeconds: 86400})
-# db.items.create_index('created_at', expireAfterSeconds=30)
+db = client['secrets_db']
+collection = db['secrets']
+
 KEY = os.getenv('KEY', '1234').encode()
+SALT_SIZE = int(os.getenv('SALT_SIZE', 32))
+HASH_NAME = os.getenv('HASH_NAME', 'sha256')
+ITERATIONS = int(os.getenv('ITERATIONS', 10000))
+
 fernet = Fernet(KEY)
 
 
@@ -30,18 +37,17 @@ async def lifespan(app: FastAPI):
     await collection.create_index(
         'expire_at',
         expireAfterSeconds=0,
-        #     partialFilterExpression={
-        #         'to_delete': True}
     )
     yield
 
 
 app = FastAPI(lifespan=lifespan)
 
+
+templates = Jinja2Templates(directory='src/templates')
+
+
 PyObjectId = Annotated[str, BeforeValidator(str)]
-
-
-#
 
 
 class Secret(BaseModel):
@@ -72,23 +78,23 @@ async def generete_secret(secret: ReadSecret) -> str:
     Generate secret with code_phrase.
     Returns secret_key to access your secret.
     '''
-    salt = os.urandom(32)
+    salt = os.urandom(SALT_SIZE)
 
-    characters = (
-        string.ascii_letters + string.digits
-        + secret.secret
-    )
+    characters = (string.ascii_letters + string.digits)
     secret_key: str = ''.join(secrets.choice(characters) for _ in range(32))
+
     code_phrase_bytes: bytes = hashlib.pbkdf2_hmac(
-        'sha256', secret.code_phrase.encode('utf-8'), salt, 10000)
-    secret_str_bytes: bytes = fernet.encrypt(
+        HASH_NAME, secret.code_phrase.encode('utf-8'), salt, ITERATIONS)
+
+    secret_bytes: bytes = fernet.encrypt(
         secret.secret.encode('utf-8'))
+
     db_secret = Secret(
         secret_key=secret_key,
-        secret=secret_str_bytes.decode('utf-8'),
+        secret=secret_bytes.decode('utf-8'),
         code_phrase=code_phrase_bytes.decode('ISO-8859-1'),
         salt=salt.decode('ISO-8859-1'),
-        expire_at=datetime.now(tz=pytz.utc) + timedelta(minutes=5)
+        expire_at=datetime.now(tz=pytz.utc) + timedelta(days=7)
     )
     await collection.insert_one(
         db_secret.model_dump(
@@ -108,19 +114,33 @@ async def get_secret(code_phrase: ReadCodePhrase, secret_key: str) -> str:
     secret = await collection.find_one({'secret_key': secret_key})
     if secret:
         if hashlib.pbkdf2_hmac(
-            'sha256',
+            HASH_NAME,
             code_phrase.code_phrase.encode('utf-8'),
             secret.get('salt').encode('ISO-8859-1'),
-            10000
+            ITERATIONS
         ) == secret.get('code_phrase').encode('ISO-8859-1'):
             secret_decoded = fernet.decrypt(secret.get('secret')).decode()
+            await collection.delete_one({'secret_key': secret_key})
             return secret_decoded
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
-    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={'error': 'Incorrect code phrase!'}
+        )
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail={'error': 'No such secret key'}
+    )
 
 
-@app.get('/secrets/', response_model_by_alias=True)
-async def get_secrets() -> List[Secret]:
-    secrets = await collection.find().to_list(10000)
-    # print(secrets)
-    return secrets
+@app.get('/', response_class=HTMLResponse)
+async def main_page(request: Request):
+    return templates.TemplateResponse(
+        request=request, name='index.html'
+    )
+
+
+@app.get('/get_a_secret', response_class=HTMLResponse)
+async def get_a_secret_page(request: Request):
+    return templates.TemplateResponse(
+        request=request, name='get_a_secret.html'
+    )
